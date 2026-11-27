@@ -23,6 +23,7 @@ class TurboModel:
     """Base contract between TorchTurboEngine and TorchTurbo models."""
 
     is_diffusion_model = False  # Set to True for subclasses to indicate a diffusion model (uses block-diffusion loss).
+    uses_indexer_loss: bool = False
 
     def get_norm(self) -> Optional[nn.Module]:
         """Final normalization layer of the model.
@@ -132,6 +133,9 @@ class TurboModel:
 
     def on_materialized(self) -> None:
         """Hook called after parameters and buffers are on a real device."""
+
+    def on_optimizer_created(self, optimizer: torch.optim.Optimizer) -> None:
+        """Install model-specific step hooks on the prepared optimizer."""
 
     def get_moe_runtime_inputs(
         self,

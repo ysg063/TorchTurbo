@@ -275,9 +275,7 @@ class BaseWeightConverter:
         hf_name = self.to_hf_name(name)
         element_size = self._get_element_size(hf_name)
         param_bytes = numel * element_size
-        if self.is_router_param(name):
-            return [hf_name], [], {hf_name: param_bytes}
-        return [name], [], {name: param_bytes}
+        return [hf_name], [], {hf_name: param_bytes}
 
     def get_param_load_entries(self, name, numel, param_to_filename=None):
         """Classify a param and return (common_keys, expert_group, size_map).
@@ -297,9 +295,7 @@ class BaseWeightConverter:
 
         element_size = self._get_element_size(hf_name)
         param_bytes = numel * element_size
-        if self.is_router_param(name):
-            return [hf_name], None, {hf_name: param_bytes}
-        return [name], None, {name: param_bytes}
+        return [hf_name], None, {hf_name: param_bytes}
 
     def get_expert_save_entries(self, name, param_to_filename=None):
         """Return (common_keys, expert_keys, size_map) if name is an expert weight, else None.

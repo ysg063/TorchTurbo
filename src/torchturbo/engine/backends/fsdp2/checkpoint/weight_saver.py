@@ -415,8 +415,9 @@ class ShardedParamManager:
             elif self.param_converter.is_router_param(clean_name):
                 self._save_router_param_to_hf(clean_name, full_tensor, local_params, full_sd)
             else:
-                if clean_name in local_params:
-                    full_sd[clean_name] = self._normalize_tensor(clean_name, full_tensor)
+                hf_name = self.param_converter.to_hf_name(clean_name)
+                if hf_name in local_params:
+                    full_sd[hf_name] = self._normalize_tensor(hf_name, full_tensor)
             del full_tensor
 
             if self._get_cpu_memory_usage_percent() >= 80 or self._get_gpu_memory_usage_percent() >= 80:

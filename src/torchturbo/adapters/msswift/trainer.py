@@ -144,6 +144,7 @@ class TurboTrainerMixin:
         # Routed plugin collator handed over by the pipeline; pop before super so
         # the swift/HF base never sees it.
         self._plugin_collator = kwargs.pop('plugin_collator', None)
+        self._indexer_num_queries_in_step = None
         super().__init__(*args, **kwargs)
         engine = engine_registry.get_engine_or_none()
         if engine is None:
@@ -308,6 +309,19 @@ class TurboTrainerMixin:
         if engine is not None:
             engine.report_metrics(logs, self.accelerator.gather)
 
+    def get_batch_samples(
+        self, epoch_iterator: Iterator, num_batches: int, device: torch.device,
+    ) -> tuple[list, torch.Tensor | int | None]:
+        batches, num_items = super().get_batch_samples(epoch_iterator, num_batches, device)
+        self._indexer_num_queries_in_step = None
+        if batches and getattr(self.model, "uses_indexer_loss", False):
+            # Indexer KL 按有效 query 平均，包含 prompt 等不计语言模型 CE 的 token。
+            # 此时每个 SP rank 仍能看见完整的 packed 边界，engine 归一化时会去除重复计数。
+            num_queries = sum(int(batch["cu_seq_lens_q"][-1]) for batch in batches)
+            query_count = torch.tensor(num_queries, dtype=torch.int64, device=device)
+            self._indexer_num_queries_in_step = self.accelerator.gather(query_count).sum()
+        return batches, num_items
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         engine = engine_registry.get_engine_or_none()
         if engine is None:
@@ -317,6 +331,9 @@ class TurboTrainerMixin:
             inputs.pop(key, None)
 
         sp_size = engine.get_sp_info()["sp_size"]
+        indexer_kwargs = {}
+        if model.training and getattr(model, "uses_indexer_loss", False):
+            indexer_kwargs["indexer_num_queries_in_step"] = self._indexer_num_queries_in_step
         loss, outputs = engine.compute_loss(
             model,
             inputs,
@@ -325,6 +342,7 @@ class TurboTrainerMixin:
             gradient_accumulation_steps=(
                 self.current_gradient_accumulation_steps if model.training else 1
             ),
+            **indexer_kwargs,
         )
 
         # SP gathers loss to full length; scale back when HF gives no

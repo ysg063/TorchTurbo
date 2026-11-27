@@ -1,0 +1,13 @@
+engine_config:
+  parallel_plan:
+    sp_size: 1
+    ep_size: 1
+  mixed_precision: bf16
+  activation_checkpointing:
+    enabled: true
+    use_reentrant: false
+  loss_chunk:
+    enabled: true
+    chunk_size: 512
+  checkpoint:
+    hf_export: final

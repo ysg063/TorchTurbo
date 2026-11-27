@@ -276,6 +276,15 @@ class OpDispatcher:
             "\n".join(lines),
         )
 
+    def _resolve_impl(self, op_name: str, impl: str | None = None) -> OpImpl:
+        device = self._device_runtime.turbo_device
+        selected_impl = impl if impl is not None else self._overrides.get(op_name)
+        return self._candidate_impl(op_name, device, impl=selected_impl)
+
+    def get_impl_name(self, op_name: str, *, impl: str | None = None) -> str:
+        """Return the implementation name dispatch would use for this call."""
+        return self._resolve_impl(op_name, impl).op_spec().impl_name
+
     def _dispatch(
         self,
         op_name: str,
@@ -283,14 +292,7 @@ class OpDispatcher:
         impl: str | None = None,
         **kwargs: Any,
     ):
-        device = self._device_runtime.turbo_device
-        selected_impl = (
-            impl
-            if impl is not None
-            else self._overrides.get(op_name)
-        )
-        impl_obj = self._candidate_impl(op_name, device, impl=selected_impl)
-        return impl_obj(*args, **kwargs)
+        return self._resolve_impl(op_name, impl)(*args, **kwargs)
 
     def rms_norm(
         self,
@@ -478,6 +480,55 @@ class OpDispatcher:
             initial_state=initial_state,
             output_final_state=output_final_state,
             packed_params=packed_params,
+            impl=impl,
+        )
+
+    def sparse_flash_attention(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        sparse_indices: torch.Tensor,
+        softmax_scale: float,
+        *,
+        query_extra: torch.Tensor,
+        key_extra: torch.Tensor,
+        cu_seqlens_q: torch.Tensor,
+        cu_seqlens_k: torch.Tensor,
+        impl: str | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run token-sparse, bottom-right causal attention with a shared KV head.
+
+        Args:
+            query: Packed queries of shape [Tq, H, D].
+            key: Packed keys of shape [Tk, 1, D].
+            value: Packed values of shape [Tk, 1, D].
+            sparse_indices: Int32 indices of shape [Tq, 1, K], relative to
+                each query's KV sequence. Trailing unused slots are -1.
+                Every query must select at least one causally visible key.
+            softmax_scale: Scale applied to the sum of the two QK dot products.
+            query_extra: Additional score channels of shape [Tq, H, De].
+            key_extra: Additional score channels of shape [Tk, 1, De].
+            cu_seqlens_q: Query sequence offsets with a leading zero.
+            cu_seqlens_k: KV sequence offsets with a leading zero. Each query
+                sequence is a suffix of its corresponding KV sequence.
+            impl: Explicit dispatcher implementation name.
+
+        Returns:
+            Attention output [Tq, H, D] and detached FP32 softmax statistics
+            (score maximum and sum of shifted exponentials), both [1, Tq, H].
+        """
+        return self._dispatch(
+            "sparse_flash_attention",
+            query,
+            key,
+            value,
+            sparse_indices,
+            softmax_scale,
+            query_extra=query_extra,
+            key_extra=key_extra,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
             impl=impl,
         )
 

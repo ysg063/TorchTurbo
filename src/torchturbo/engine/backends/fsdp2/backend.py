@@ -1769,6 +1769,17 @@ class FSDP2Backend(BaseBackend):
             mtp_loss_scaling_factor=mtp_loss_scaling_factor,
             loss_scale=loss_scale,
         )
+        if getattr(outputs, "indexer_loss_coeff", None) is not None:
+            indexer_loss = self._normalize_indexer_loss(
+                outputs,
+                sp_size=sp_size,
+                sp_group=sp_group,
+                num_items_in_batch=num_items_in_batch,
+                step_num_queries=kwargs.get("indexer_num_queries_in_step"),
+                accumulation_steps=kwargs.get("gradient_accumulation_steps", 1),
+            )
+            total_loss = total_loss + indexer_loss * outputs.indexer_loss_coeff
+            outputs.indexer_loss = indexer_loss.detach()
         if dspark_loss_fn is not None:
             outputs.dspark_loss_fn = None
             if self.config.dspark.loss_scaling_factor == 0.0:
@@ -1818,6 +1829,32 @@ class FSDP2Backend(BaseBackend):
                 sum(mtp_losses) * mtp_loss_scaling_factor
             ).detach()
         return (total_loss, outputs) if return_outputs else total_loss
+
+    @staticmethod
+    def _normalize_indexer_loss(
+        outputs: Any,
+        *,
+        sp_size: int,
+        sp_group: Any,
+        num_items_in_batch: int | torch.Tensor | None,
+        step_num_queries: torch.Tensor | None,
+        accumulation_steps: int,
+    ) -> torch.Tensor:
+        """Scale sparse indexer loss for FSDP and the trainer's CE convention."""
+        loss = outputs.indexer_loss_sum
+        if step_num_queries is None:
+            num_queries = loss.new_tensor(outputs.indexer_num_queries, dtype=torch.int64)
+            dist.all_reduce(num_queries)
+            scale = 1 / sp_size if num_items_in_batch is None else 1 / accumulation_steps
+        else:
+            # Trainer 在每个 SP rank 上都按完整文档计数，除以 SP 大小得到去重后的全局 query 数。
+            num_queries = step_num_queries.div(sp_size, rounding_mode="floor")
+            scale = accumulation_steps / sp_size if num_items_in_batch is None else 1
+        # SP rank 各自拥有一部分 query。用可反传的求和拼回 KL，再考虑 DP 梯度平均和 DSA 层数。
+        if sp_size > 1:
+            loss = torch.distributed.nn.all_reduce(loss, op=dist.ReduceOp.SUM, group=sp_group)
+        dp_size = dist.get_world_size() // sp_size
+        return loss * (scale * dp_size) / (num_queries.clamp_min(1) * outputs.indexer_num_layers)
 
     @staticmethod
     def _prepare_loss_labels(

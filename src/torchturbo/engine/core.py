@@ -669,6 +669,10 @@ class TorchTurboEngine:
             )
 
         self.optimizer = self.backend.prepare_optimizer(plan)
+        from ..models.base import TurboModel
+
+        if isinstance(self.model, TurboModel):
+            self.model.on_optimizer_created(self.optimizer)
         logger.info_rank0(
             "Created optimizer %s from %r",
             type(self.optimizer).__name__,
@@ -1106,6 +1110,7 @@ class TorchTurboEngine:
             inputs,
             return_outputs,
             num_items_in_batch=num_items_in_batch,
+            gradient_accumulation_steps=gradient_accumulation_steps,
             **kwargs,
         )
         if return_outputs:
